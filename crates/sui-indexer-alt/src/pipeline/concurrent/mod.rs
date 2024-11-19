@@ -53,14 +53,14 @@ const MAX_WATERMARK_UPDATES: usize = 10_000;
 #[async_trait::async_trait]
 pub trait Handler: Processor {
     /// If at least this many rows are pending, the committer will commit them eagerly.
-    const MIN_EAGER_ROWS: usize = 50;
+    const MIN_EAGER_ROWS: usize = 250;
 
     /// If there are more than this many rows pending, the committer will only commit this many in
     /// one operation.
-    const MAX_CHUNK_ROWS: usize = 200;
+    const MAX_CHUNK_ROWS: usize = 1000;
 
     /// If there are more than this many rows pending, the committer applies backpressure.
-    const MAX_PENDING_ROWS: usize = 1000;
+    const MAX_PENDING_ROWS: usize = 5000;
 
     /// Provides a way for individual pipeline to override the write_concurrency parameter
     /// from the PipelineConfig. This is used to determine the number of concurrent tasks
