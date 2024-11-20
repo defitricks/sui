@@ -262,8 +262,11 @@ impl UncommittedData {
     }
 }
 
-// TODO: set this via the config
-static MAX_CACHE_SIZE: u64 = 50;
+fn get_cache_size() -> u64 {
+    use rand::Rng;
+    rand::thread_rng().gen_range(1..50)
+}
+
 /// CachedData stores data that has been committed to the db, but is likely to be read soon.
 struct CachedCommittedData {
     // See module level comment for an explanation of caching strategy.
@@ -294,38 +297,17 @@ struct CachedCommittedData {
 
 impl CachedCommittedData {
     fn new() -> Self {
-        let object_cache = MokaCache::builder()
-            .max_capacity(MAX_CACHE_SIZE)
-            .max_capacity(MAX_CACHE_SIZE)
-            .build();
-        let marker_cache = MokaCache::builder()
-            .max_capacity(MAX_CACHE_SIZE)
-            .max_capacity(MAX_CACHE_SIZE)
-            .build();
-        let transactions = MokaCache::builder()
-            .max_capacity(MAX_CACHE_SIZE)
-            .max_capacity(MAX_CACHE_SIZE)
-            .build();
-        let transaction_effects = MokaCache::builder()
-            .max_capacity(MAX_CACHE_SIZE)
-            .max_capacity(MAX_CACHE_SIZE)
-            .build();
-        let transaction_events = MokaCache::builder()
-            .max_capacity(MAX_CACHE_SIZE)
-            .max_capacity(MAX_CACHE_SIZE)
-            .build();
-        let executed_effects_digests = MokaCache::builder()
-            .max_capacity(MAX_CACHE_SIZE)
-            .max_capacity(MAX_CACHE_SIZE)
-            .build();
-        let transaction_objects = MokaCache::builder()
-            .max_capacity(MAX_CACHE_SIZE)
-            .max_capacity(MAX_CACHE_SIZE)
-            .build();
+        let object_cache = MokaCache::builder().max_capacity(get_cache_size()).build();
+        let marker_cache = MokaCache::builder().max_capacity(get_cache_size()).build();
+        let transactions = MokaCache::builder().max_capacity(get_cache_size()).build();
+        let transaction_effects = MokaCache::builder().max_capacity(get_cache_size()).build();
+        let transaction_events = MokaCache::builder().max_capacity(get_cache_size()).build();
+        let executed_effects_digests = MokaCache::builder().max_capacity(get_cache_size()).build();
+        let transaction_objects = MokaCache::builder().max_capacity(get_cache_size()).build();
 
         Self {
             object_cache,
-            object_by_id_cache: MonotonicCache::new(MAX_CACHE_SIZE),
+            object_by_id_cache: MonotonicCache::new(get_cache_size()),
             marker_cache,
             transactions,
             transaction_effects,
@@ -428,10 +410,7 @@ macro_rules! check_cache_entry_by_latest {
 
 impl WritebackCache {
     pub fn new(store: Arc<AuthorityStore>, metrics: Arc<ExecutionCacheMetrics>) -> Self {
-        let packages = MokaCache::builder()
-            .max_capacity(MAX_CACHE_SIZE)
-            .max_capacity(MAX_CACHE_SIZE)
-            .build();
+        let packages = MokaCache::builder().max_capacity(get_cache_size()).build();
         Self {
             dirty: UncommittedData::new(),
             cached: CachedCommittedData::new(),
