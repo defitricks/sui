@@ -484,12 +484,26 @@ impl WritebackCache {
         //   the tx finalizer, plus checkpoint executor, consensus, and RPCs from fullnodes.
         let mut entry = self.dirty.objects.entry(*object_id).or_default();
 
-        self.cached.object_by_id_cache.insert(
-            object_id,
-            LatestObjectCacheEntry::Object(version, object.clone()),
-        );
+        // write to the cache with an exclusive lock, and do not release it until the dirty entry
+        // has been updated. Readers write to the cache with a shared lock. This ensures that the
+        // following cannot occur:
+        // - Thread 1: reads (O, V) from db.
+        // - Thread 2: writes (O, V+1) to dirty set and object_by_id_cache.
+        // - Thread 3: writes some unrelated object to object_by_id_cache, which evicts (O, V+1).
+        // - Thread 1: writes (O, V) to object_by_id_cache.
+        //
+        // The eviction caused by thread 3 is still possible, but the bug cannot occur because
+        // either Thread 1 will write (O, V) to the cache before Thread 2 can write (O, V+1),
+        // or else Thread 2 will write (O, V+1) to the cache first guaranteeing that Thread 1
+        // sees (O, V+1) instead of (O, V). In either case the cache ends in a coherent state.
+        self.with_object_by_id_cache_write(object_id, || {
+            self.cached.object_by_id_cache.insert(
+                object_id,
+                LatestObjectCacheEntry::Object(version, object.clone()),
+            );
 
-        entry.insert(version, object);
+            entry.insert(version, object);
+        });
     }
 
     async fn write_marker_value(
@@ -727,23 +741,35 @@ impl WritebackCache {
         )
     }
 
+    fn with_object_by_id_cache_write<T>(&self, id: &ObjectID, cb: impl FnOnce() -> T) -> T {
+        let _write_lock = self.cached.object_by_id_cache.write_lock(id);
+        cb()
+    }
+
+    fn with_object_by_id_cache_update<T>(&self, id: &ObjectID, cb: impl FnOnce() -> T) -> T {
+        let _read_lock = self.cached.object_by_id_cache.read_lock(id);
+        cb()
+    }
+
     fn get_object_impl(&self, request_type: &'static str, id: &ObjectID) -> Option<Object> {
-        match self.get_object_by_id_cache_only(request_type, id) {
-            CacheResult::Hit((_, object)) => Some(object),
-            CacheResult::NegativeHit => None,
-            CacheResult::Miss => {
-                let obj = self.store.get_object(id);
-                if let Some(obj) = &obj {
-                    self.cache_latest_object_by_id(
-                        id,
-                        LatestObjectCacheEntry::Object(obj.version(), obj.clone().into()),
-                    );
-                } else {
-                    self.cache_object_not_found(id);
+        self.with_object_by_id_cache_update(id, || {
+            match self.get_object_by_id_cache_only(request_type, id) {
+                CacheResult::Hit((_, object)) => Some(object),
+                CacheResult::NegativeHit => None,
+                CacheResult::Miss => {
+                    let obj = self.store.get_object(id);
+                    if let Some(obj) = &obj {
+                        self.cache_latest_object_by_id(
+                            id,
+                            LatestObjectCacheEntry::Object(obj.version(), obj.clone().into()),
+                        );
+                    } else {
+                        self.cache_object_not_found(id);
+                    }
+                    obj
                 }
-                obj
             }
-        }
+        })
     }
 
     fn record_db_get(&self, request_type: &'static str) -> &AuthorityStore {
@@ -1441,6 +1467,10 @@ impl ObjectCacheRead for WritebackCache {
                     // we can always cache the latest object (or tombstone), even if it is not within the
                     // version_bound. This is done in order to warm the cache in the case where a sequence
                     // of transactions all read the same child object without writing to it.
+
+                    // Note: no need to call with_object_by_id_cache_update here, because we are holding
+                    // the lock on the dirty cache entry, and `latest` cannot become out-of-date
+                    // while we hold that lock.
                     self.cache_latest_object_by_id(
                         &object_id,
                         LatestObjectCacheEntry::Object(obj_version, obj_entry.clone()),

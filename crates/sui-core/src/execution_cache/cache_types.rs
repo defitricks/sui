@@ -1,13 +1,13 @@
 // Copyright (c) Mysten Labs, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-use std::cmp::Ordering;
 use std::collections::VecDeque;
-use std::hash::Hash;
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
+use std::{cmp::Ordering, hash::DefaultHasher};
 
 use moka::sync::Cache as MokaCache;
-use parking_lot::Mutex;
+use parking_lot::{Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use sui_types::base_types::SequenceNumber;
 
 /// CachedVersionMap is a map from version to value, with the additional contraints:
@@ -149,6 +149,7 @@ pub trait IsNewer {
 
 pub struct MonotonicCache<K, V> {
     cache: MokaCache<K, Arc<Mutex<V>>>,
+    locks: Vec<RwLock<()>>,
 }
 
 impl<K, V> MonotonicCache<K, V>
@@ -159,11 +160,29 @@ where
     pub fn new(cache_size: u64) -> Self {
         Self {
             cache: MokaCache::builder().max_capacity(cache_size).build(),
+            locks: (0..255).map(|_| RwLock::new(())).collect(),
         }
     }
 
     pub fn get(&self, key: &K) -> Option<Arc<Mutex<V>>> {
         self.cache.get(key)
+    }
+
+    fn lock(&self, key: &K) -> &RwLock<()> {
+        let mut state = DefaultHasher::new();
+        key.hash(&mut state);
+        let hash = state.finish();
+        self.locks
+            .get((hash % self.locks.len() as u64) as usize)
+            .unwrap()
+    }
+
+    pub fn write_lock(&self, key: &K) -> RwLockWriteGuard<()> {
+        self.lock(key).write()
+    }
+
+    pub fn read_lock(&self, key: &K) -> RwLockReadGuard<()> {
+        self.lock(key).read()
     }
 
     // Update the cache with guaranteed monotonicity. That is, if there are N
